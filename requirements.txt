@@ -1,0 +1,7 @@
+# ไลบรารีที่จำเป็นสำหรับรัน app.py
+streamlit==1.40.2
+scikit-learn==1.5.2
+pandas==2.2.3
+joblib==1.4.2
+numpy==1.26.4
+Orange3==3.40.0
