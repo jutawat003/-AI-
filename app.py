@@ -4,7 +4,8 @@ app.py — เว็บแอป Streamlit สำหรับใช้งาน�
 รันด้วยคำสั่ง:  streamlit run app.py
 """
 
-import os                      # ใช้ตรวจสอบว่ามีไฟล์โมเดลอยู่จริงหรือไม่
+import io                      # ใช้รองรับกรณีผู้ใช้อัปโหลดไฟล์โมเดลเข้ามาเอง
+from pathlib import Path        # ใช้หาตำแหน่งไฟล์โมเดลแบบอ้างอิงตำแหน่งของ app.py
 import joblib                  # ใช้โหลดไฟล์โมเดล .pkcls
 import numpy as np             # ใช้จัดรูปแบบข้อมูลเป็นเมทริกซ์ก่อนส่งเข้าโมเดล
 import pandas as pd            # ใช้แสดงตารางสรุปค่าที่ผู้ใช้กรอก
@@ -44,20 +45,46 @@ THAI_NAMES = {
 }
 
 
-# ===================== 2) ฟังก์ชันโหลดโมเดล =====================
+# ===================== 2) ฟังก์ชันค้นหา/โหลดโมเดล =====================
+# โฟลเดอร์ที่ app.py อยู่ (สำคัญมากตอน deploy เพราะ working directory อาจไม่ใช่โฟลเดอร์นี้)
+BASE_DIR = Path(__file__).parent.resolve()
+
+# ตำแหน่งที่จะไล่ค้นหาไฟล์โมเดล (เผื่อผู้ใช้วางไว้ในโฟลเดอร์ย่อย)
+SEARCH_DIRS = [BASE_DIR, BASE_DIR / "models", BASE_DIR / "model", BASE_DIR / "data", Path.cwd()]
+
+
+def find_model_file(filename: str):
+    """ค้นหาไฟล์โมเดลตามตำแหน่งที่เป็นไปได้ คืนค่า Path ถ้าเจอ ไม่เจอคืน None"""
+    for folder in SEARCH_DIRS:
+        candidate = folder / filename
+        if candidate.is_file():
+            return candidate
+    # ถ้ายังไม่เจอ ให้ค้นหาแบบลึกทั้งโปรเจกต์เป็นทางเลือกสุดท้าย
+    for candidate in BASE_DIR.rglob(filename):
+        return candidate
+    return None
+
+
 @st.cache_resource(show_spinner="กำลังโหลดโมเดล...")
-def load_model(path: str):
-    """โหลดไฟล์ .pkcls ด้วย joblib และแคชไว้เพื่อไม่ต้องโหลดซ้ำทุกครั้งที่หน้าเว็บรีเฟรช"""
+def load_model_from_path(path: str):
+    """โหลดไฟล์ .pkcls จากดิสก์ด้วย joblib และแคชไว้ไม่ให้โหลดซ้ำทุกครั้งที่หน้าเว็บรีเฟรช"""
     return joblib.load(path)
 
 
+@st.cache_resource(show_spinner="กำลังโหลดโมเดล...")
+def load_model_from_bytes(raw: bytes):
+    """โหลดโมเดลจากไฟล์ที่ผู้ใช้อัปโหลดผ่านหน้าเว็บ (ใช้เมื่อหาไฟล์ในโปรเจกต์ไม่เจอ)"""
+    return joblib.load(io.BytesIO(raw))
+
+
 @st.cache_data(show_spinner=False)
-def get_feature_stats(path: str):
+def get_feature_stats(_model, cache_key: str):
     """
     ดึงค่าสถิติ (ต่ำสุด/สูงสุด/ค่าเฉลี่ย) ของแต่ละฟีเจอร์จากข้อมูลที่ใช้ฝึกโมเดล
     เพื่อนำมาตั้งเป็นค่าเริ่มต้นและขอบเขตของช่องกรอกให้สมเหตุสมผล
+    (พารามิเตอร์ _model ขึ้นต้นด้วย _ เพื่อบอก Streamlit ว่าไม่ต้องนำไปคำนวณ hash)
     """
-    model = load_model(path)
+    model = _model
     stats = {}
     data = getattr(model, "instances", None)   # Orange เก็บข้อมูลฝึกไว้ใน .instances
     if data is not None and getattr(data, "X", None) is not None and len(data.X):
@@ -82,17 +109,40 @@ with st.sidebar:
     model_name = st.selectbox("เลือกโมเดลที่ต้องการใช้ทำนาย", list(MODEL_FILES.keys()))
     model_path = MODEL_FILES[model_name]
 
-# ---- ตรวจสอบว่ามีไฟล์โมเดลอยู่จริง ----
-if not os.path.exists(model_path):
-    st.error(f"ไม่พบไฟล์โมเดล «{model_path}» กรุณาวางไฟล์ .pkcls ไว้ในโฟลเดอร์เดียวกับ app.py")
-    st.stop()
+# ---- ค้นหาไฟล์โมเดลในโปรเจกต์ ----
+found_path = find_model_file(model_path)
 
-# ---- โหลดโมเดลที่เลือก ----
-model = load_model(model_path)
+if found_path is not None:
+    # เจอไฟล์ในโปรเจกต์ → โหลดจากดิสก์ตามปกติ
+    model = load_model_from_path(str(found_path))
+    cache_key = str(found_path)
+else:
+    # ไม่เจอไฟล์ → แจ้งเตือนพร้อมบอกว่าตอนนี้มีไฟล์อะไรอยู่บ้าง และเปิดช่องให้อัปโหลดชั่วคราว
+    st.error(
+        f"ไม่พบไฟล์โมเดล «{model_path}»\n\n"
+        "ถ้า deploy บน Streamlit Cloud ต้อง commit ไฟล์ .pkcls ขึ้น GitHub repo "
+        "ให้อยู่โฟลเดอร์เดียวกับ app.py ด้วย"
+    )
+    with st.expander("🔍 ไฟล์ที่พบในโปรเจกต์ (ใช้ตรวจสอบชื่อไฟล์/ตำแหน่ง)"):
+        st.write(f"โฟลเดอร์ของ app.py: `{BASE_DIR}`")
+        all_files = sorted(p.relative_to(BASE_DIR).as_posix() for p in BASE_DIR.rglob("*")
+                           if p.is_file() and ".git/" not in p.as_posix())
+        st.code("\n".join(all_files[:100]) or "(ไม่พบไฟล์ใด ๆ)")
+
+    uploaded = st.file_uploader(
+        "หรืออัปโหลดไฟล์โมเดล .pkcls ที่นี่เพื่อทดลองใช้งานชั่วคราว",
+        type=["pkcls", "pkl"],
+    )
+    if uploaded is None:
+        st.stop()      # ยังไม่มีโมเดล → หยุดการทำงานของหน้าเว็บไว้ก่อน
+    model = load_model_from_bytes(uploaded.getvalue())
+    cache_key = uploaded.name
+
+# ---- อ่านโครงสร้างคอลัมน์จากโมเดลที่โหลดได้ ----
 domain = model.original_domain          # โครงสร้างคอลัมน์ "ก่อนผ่าน preprocess" ของ Orange
 features = list(domain.attributes)      # รายชื่อตัวแปรต้นทั้งหมดที่ใช้ตอนฝึก
 class_var = domain.class_var            # ตัวแปรตาม (ผลลัพธ์ที่ทำนาย)
-stats = get_feature_stats(model_path)
+stats = get_feature_stats(model, cache_key)
 
 with st.sidebar:
     st.success(f"โหลดโมเดลสำเร็จ: **{model_name}**")
