@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 app.py — เว็บแอป Streamlit "AI แนะนำอาชีพเสริม"
-โหลดโมเดลที่ฝึกจาก Orange Data Mining (*.pkcls) แล้วประเมินว่าผู้ใช้
-"จำเป็นต้องหารายได้เสริม" หรือไม่ จากข้อมูลทางการเงินที่กรอก
-(ไม่เจาะจงชื่ออาชีพ เพราะโมเดลไม่มีข้อมูลอาชีพ แนะนำแค่ระดับความจำเป็น)
+โหลดโมเดลที่ฝึกจาก Orange Data Mining (*.pkcls) แล้วประเมินจากข้อมูลทางการเงินที่ผู้ใช้กรอก
+รองรับโมเดล 2 ชนิด (แอปตรวจชนิดจากตัวแปรตามของโมเดลให้อัตโนมัติ):
+  - Classification : ทำนายว่า "จำเป็นต้องหารายได้เสริม" หรือไม่ (0/1)
+  - Regression     : ทำนาย "คะแนนแนะนำการลงทุน" (0-100) เช่น Linear Regression
+(ไม่เจาะจงชื่ออาชีพจากโมเดล เพราะโมเดลไม่มีข้อมูลอาชีพ)
 
 รันด้วยคำสั่ง:  streamlit run app.py
 """
@@ -26,11 +28,23 @@ PRETTY_NAMES = {
     "neural_network": "Neural Network",
 }
 
-# ---- ข้อความแทนค่าคลาส 0/1 ของตัวแปรตาม (ธีม "อาชีพเสริม" ไม่เจาะจงชื่ออาชีพ) ----
+# ---- ข้อความแทนค่าคลาส 0/1 ของตัวแปรตาม (ใช้กับโมเดล Classification เท่านั้น) ----
 CLASS_LABELS = {
     "0": "ควรหารายได้เสริมเพิ่มเติม",
     "1": "ยังไม่จำเป็นต้องหารายได้เสริมเร่งด่วน",
 }
+
+# ---- การตั้งค่าสำหรับโมเดล Regression (คะแนนแนะนำการลงทุน 0-100) ----
+TARGET_THAI = {
+    "Investment_Recommendation_Score": "คะแนนแนะนำการลงทุน",
+}
+# เกณฑ์แบ่งระดับคะแนน อิงจากข้อมูลฝึก: ควอร์ไทล์ที่ 25 ≈ 33 และควอร์ไทล์ที่ 75 ≈ 65.5
+# (ปรับเปลี่ยนได้ตามที่เหมาะกับโครงงาน — เป็นเกณฑ์ที่ตั้งเอง ไม่ใช่ค่าที่โมเดลเรียนรู้)
+SCORE_LOW = 33.0
+SCORE_HIGH = 65.5
+# ความคลาดเคลื่อนเฉลี่ย (MAE) ของโมเดล Linear Regression จาก Cross-validation ใน Orange
+# ถ้าฝึกโมเดลใหม่ ให้อัปเดตตัวเลขนี้ตามผลใน Test and Score
+REGRESSION_MAE = 3.9
 
 # ---- ชื่อภาษาไทยของแต่ละคอลัมน์ ----
 THAI_NAMES = {
@@ -107,9 +121,9 @@ def get_feature_stats(_model, cache_key: str):
 
 
 # ===================== 2.1) กฎแนะนำ "อาชีพเสริม" ตามรายรับ-รายจ่าย =====================
-# หมายเหตุสำคัญ: โมเดล .pkcls ที่ฝึกไว้ทำนายได้แค่ "ควรหารายได้เสริมหรือไม่" (0/1)
-# มันไม่มีข้อมูลชื่ออาชีพอยู่ในตัวเลย ส่วนนี้จึงเป็น "กฎที่เขียนเอง" (business rule)
-# ต่อยอดจากค่ารายรับ-รายจ่ายที่ผู้ใช้กรอก ไม่ใช่สิ่งที่ AI เรียนรู้มาโดยตรง
+# หมายเหตุสำคัญ: โมเดล .pkcls ที่ฝึกไว้ไม่มีข้อมูลชื่ออาชีพอยู่ในตัวเลย
+# ส่วนนี้จึงเป็น "กฎที่เขียนเอง" (business rule) ต่อยอดจากค่ารายรับ-รายจ่ายที่ผู้ใช้กรอก
+# ไม่ใช่สิ่งที่ AI เรียนรู้มาโดยตรง
 def suggest_careers(user_values: dict) -> list[tuple[str, str]]:
     """
     คืนค่าเป็นลิสต์ของ (ชื่ออาชีพเสริมที่แนะนำ, เหตุผลสั้น ๆ)
@@ -162,8 +176,8 @@ def suggest_careers(user_values: dict) -> list[tuple[str, str]]:
 # ===================== 3) ส่วนหัวของแอป =====================
 st.title("💼 โปรแกรม AI แนะนำอาชีพเสริมที่เหมาะสม")
 st.caption(
-    "กรอกข้อมูลทางการเงินของคุณ แล้วให้ AI ประเมินว่า **ควรหารายได้เสริมเพิ่มเติม** "
-    "หรือฐานะการเงินปัจจุบันยังไปได้ดีอยู่แล้ว"
+    "กรอกข้อมูลทางการเงินของคุณ แล้วให้ AI ประเมินฐานะการเงิน "
+    "พร้อมแนะนำแนวทางอาชีพเสริมที่เหมาะสม"
 )
 
 # ---- ค้นหาไฟล์โมเดลทั้งหมดที่มีอยู่จริงในโปรเจกต์ ----
@@ -203,12 +217,14 @@ else:
 domain = model.original_domain
 features = list(domain.attributes)
 class_var = domain.class_var
+is_regression = class_var.is_continuous   # True = โมเดลทำนายค่าตัวเลข, False = ทำนายหมวดหมู่
 stats = get_feature_stats(model, cache_key)
 
 # รายละเอียดทางเทคนิคซ่อนไว้ใน expander ไม่ให้หน้าเว็บดูรก
 with st.sidebar:
     st.success(f"โมเดลพร้อมใช้งาน: **{model_name}**")
     with st.expander("รายละเอียดทางเทคนิค"):
+        st.write(f"ชนิดโมเดล: {'Regression (ทำนายค่าตัวเลข)' if is_regression else 'Classification (ทำนายหมวดหมู่)'}")
         st.write(f"จำนวนตัวแปรต้น: {len(features)} ตัว")
         st.write(f"ตัวแปรตาม: {class_var.name}")
 
@@ -270,6 +286,18 @@ with st.form("predict_form"):
 
 
 # ===================== 5) ประมวลผลและแสดงผลลัพธ์ =====================
+def render_inputs_table():
+    """ตารางสรุปข้อมูลที่ผู้ใช้กรอก (ใช้ร่วมกันทั้ง Classification และ Regression)"""
+    st.write("**ข้อมูลที่ใช้ประเมิน**")
+    st.dataframe(
+        pd.DataFrame({
+            "ตัวแปร": [THAI_NAMES.get(v.name, v.name) for v in features],
+            "ค่าที่กรอก": [user_values[v.name] for v in features],
+        }),
+        hide_index=True,
+    )
+
+
 if submitted:
     # ---- 5.1 จัดรูปแบบข้อมูลให้ตรงกับตอนฝึกโมเดล ----
     row = []
@@ -281,32 +309,69 @@ if submitted:
     # ส่งเป็น Orange Table เพื่อให้ Orange แปลงข้อมูลตาม preprocess ของแต่ละโมเดลให้อัตโนมัติ
     table = Table.from_numpy(Domain(domain.attributes), X)
 
-    # ---- 5.2 ทำนายผล ----
-    pred_idx, probs = model(table, model.ValueProbs)
-    pred_idx = int(pred_idx[0])
-    probs = np.asarray(probs)[0]
-    pred_label = str(class_var.values[pred_idx])
-    pred_text = CLASS_LABELS.get(pred_label, pred_label)
-    confidence = float(probs[pred_idx])
+    if is_regression:
+        # ---- 5.2A โมเดล Regression: ทำนายเป็นตัวเลข (ห้ามขอ ValueProbs เพราะไม่มีความน่าจะเป็นของคลาส) ----
+        raw_score = float(np.asarray(model(table)).ravel()[0])
+        score = min(max(raw_score, 0.0), 100.0)   # Linear Regression อาจให้ค่านอกช่วง 0-100 จึงปัดเข้าช่วง
+        target_label = TARGET_THAI.get(class_var.name, class_var.name)
 
-    # ---- 5.3 แสดงผลลัพธ์แบบเข้าใจง่าย (ไม่เจาะจงชื่ออาชีพ) ----
-    st.subheader("📊 ผลการประเมิน")
-    if pred_label == "1":
-        st.success(f"✅ {pred_text}")
-        st.write(
-            "จากข้อมูลที่กรอก ฐานะการเงินของคุณอยู่ในเกณฑ์ที่มั่นคง "
-            "ยังไม่มีความจำเป็นเร่งด่วนที่ต้องหารายได้เสริม "
-            "แต่ยังสามารถพิจารณาอาชีพเสริมเพื่อเพิ่มความมั่นคงในระยะยาวได้"
+        # ---- 5.3A แสดงผลลัพธ์ ----
+        st.subheader("📊 ผลการประเมิน")
+        st.metric(target_label, f"{score:.1f} / 100")
+        st.progress(score / 100)
+
+        if score >= SCORE_HIGH:
+            st.success("✅ คะแนนอยู่ในระดับสูง")
+            st.write(
+                "จากข้อมูลที่กรอก ฐานะการเงินและปัจจัยแวดล้อมอยู่ในเกณฑ์ที่เอื้อต่อการลงทุน "
+                "ยังไม่มีความจำเป็นเร่งด่วนที่ต้องหารายได้เสริม "
+                "แต่สามารถพิจารณาอาชีพเสริมเพื่อเพิ่มความมั่นคงในระยะยาวได้"
+            )
+        elif score >= SCORE_LOW:
+            st.info("ℹ️ คะแนนอยู่ในระดับปานกลาง")
+            st.write(
+                "จากข้อมูลที่กรอก ฐานะการเงินอยู่ในเกณฑ์ปานกลาง "
+                "ควรเพิ่มรายได้หรือสร้างเงินออมเพิ่มเติมก่อนขยายการลงทุน "
+                "อาชีพเสริมที่ใช้ทุนไม่มากจะช่วยเสริมความมั่นคงได้"
+            )
+        else:
+            st.warning("⚠️ คะแนนอยู่ในระดับต่ำ")
+            st.write(
+                "จากข้อมูลที่กรอก ฐานะการเงินและปัจจัยแวดล้อมยังไม่เอื้อต่อการลงทุน "
+                "แนะนำให้เน้นเพิ่มรายได้เสริมและสร้างเงินสำรองก่อน แล้วค่อยพิจารณาลงทุน"
+            )
+
+        st.caption(
+            f"โมเดลนี้ทำนายคลาดเคลื่อนโดยเฉลี่ยประมาณ {REGRESSION_MAE:.1f} คะแนน "
+            f"(เกณฑ์แบ่งระดับ: ต่ำ < {SCORE_LOW:g}, ปานกลาง {SCORE_LOW:g}–{SCORE_HIGH:g}, สูง ≥ {SCORE_HIGH:g})"
         )
     else:
-        st.warning(f"⚠️ {pred_text}")
-        st.write(
-            "จากข้อมูลที่กรอก ฐานะการเงินของคุณอาจยังไม่มั่นคงเพียงพอ "
-            "แนะนำให้พิจารณาหารายได้เสริมเพิ่มเติม เพื่อช่วยเสริมสร้างความมั่นคงทางการเงิน"
-        )
+        # ---- 5.2B โมเดล Classification: ทำนายหมวดหมู่ พร้อมความน่าจะเป็น ----
+        pred_idx, probs = model(table, model.ValueProbs)
+        pred_idx = int(pred_idx[0])
+        probs = np.asarray(probs)[0]
+        pred_label = str(class_var.values[pred_idx])
+        pred_text = CLASS_LABELS.get(pred_label, pred_label)
+        confidence = float(probs[pred_idx])
 
-    st.metric("ความมั่นใจของการประเมิน (Probability)", f"{confidence * 100:.2f}%")
-    st.progress(min(max(confidence, 0.0), 1.0))
+        # ---- 5.3B แสดงผลลัพธ์แบบเข้าใจง่าย (ไม่เจาะจงชื่ออาชีพ) ----
+        st.subheader("📊 ผลการประเมิน")
+        if pred_label == "1":
+            st.success(f"✅ {pred_text}")
+            st.write(
+                "จากข้อมูลที่กรอก ฐานะการเงินของคุณอยู่ในเกณฑ์ที่มั่นคง "
+                "ยังไม่มีความจำเป็นเร่งด่วนที่ต้องหารายได้เสริม "
+                "แต่ยังสามารถพิจารณาอาชีพเสริมเพื่อเพิ่มความมั่นคงในระยะยาวได้"
+            )
+        else:
+            st.warning(f"⚠️ {pred_text}")
+            st.write(
+                "จากข้อมูลที่กรอก ฐานะการเงินของคุณอาจยังไม่มั่นคงเพียงพอ "
+                "แนะนำให้พิจารณาหารายได้เสริมเพิ่มเติม เพื่อช่วยเสริมสร้างความมั่นคงทางการเงิน"
+            )
+
+        st.metric("ความมั่นใจของการประเมิน (Probability)", f"{confidence * 100:.2f}%")
+        st.progress(min(max(confidence, 0.0), 1.0))
 
     # ---- 5.4 แนะนำอาชีพเสริมที่เหมาะสม (กฎที่เขียนเอง ต่อยอดจากรายรับ-รายจ่าย) ----
     careers = suggest_careers(user_values)
@@ -321,21 +386,19 @@ if submitted:
             st.caption(reason)
 
     with st.expander("ดูรายละเอียดเพิ่มเติม"):
-        st.write("**ความน่าจะเป็นแยกตามผลลัพธ์**")
-        st.dataframe(
-            pd.DataFrame({
-                "ผลลัพธ์": [CLASS_LABELS.get(str(v), str(v)) for v in class_var.values],
-                "ความน่าจะเป็น (%)": [f"{p * 100:.2f}" for p in probs],
-            }),
-            hide_index=True,
-        )
-        st.write("**ข้อมูลที่ใช้ประเมิน**")
-        st.dataframe(
-            pd.DataFrame({
-                "ตัวแปร": [THAI_NAMES.get(v.name, v.name) for v in features],
-                "ค่าที่กรอก": [user_values[v.name] for v in features],
-            }),
-            hide_index=True,
-        )
+        if is_regression:
+            st.write(f"**ค่าดิบที่โมเดลทำนาย:** {raw_score:.2f}")
+            if raw_score != score:
+                st.caption("ค่าดิบอยู่นอกช่วง 0-100 แอปจึงปัดให้อยู่ในช่วงก่อนแสดงผล")
+        else:
+            st.write("**ความน่าจะเป็นแยกตามผลลัพธ์**")
+            st.dataframe(
+                pd.DataFrame({
+                    "ผลลัพธ์": [CLASS_LABELS.get(str(v), str(v)) for v in class_var.values],
+                    "ความน่าจะเป็น (%)": [f"{p * 100:.2f}" for p in probs],
+                }),
+                hide_index=True,
+            )
+        render_inputs_table()
 else:
     st.info("กรอกข้อมูลด้านบนให้ครบ แล้วกดปุ่ม **ประเมินผล** เพื่อดูคำแนะนำ")
